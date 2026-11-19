@@ -1,0 +1,26 @@
+{
+"name": "Trénink & Rovnováha 2.0",
+"short_name": "Trénink",
+"description": "Sledování silového tréninku, lezení, badmintonu, kola, regenerace a progresu.",
+"start_url": "./index.html",
+"scope": "./",
+"display": "standalone",
+"orientation": "portrait-primary",
+"background_color": "#0c0e16",
+"theme_color": "#0c0e16",
+"lang": "cs",
+"icons": [
+{
+"src": "./icon.svg",
+"sizes": "192x192 512x512 any",
+"type": "image/svg+xml",
+"purpose": "any"
+},
+{
+"src": "./icon.svg",
+"sizes": "512x512",
+"type": "image/svg+xml",
+"purpose": "maskable"
+}
+]
+}
