@@ -7,9 +7,9 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="manifest" href="./manifest.json" />
+  <link rel="manifest" href="./manifest.json" id="dynamicManifestLink" />
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
-  <link rel="apple-touch-icon" href="./icon.svg" />
+  <link rel="apple-touch-icon" href="./icon.svg" id="appleTouchIconLink" />
   <title>Trénink &amp; Rovnováha 2.0</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -592,6 +592,9 @@
       <div class="brand-row">
         <div class="app-title">Trénink &amp; Rovnováha</div>
         <div class="header-pills-right">
+          <button id="headerSoundBtn" class="mode-pill" type="button" title="Zvuk a haptika při tréninku">
+            <span id="headerSoundIcon">🔔</span>
+          </button>
           <button id="headerThemeBtn" class="mode-pill" type="button" title="Přepnout vzhled (Světlý / Mezi / Tmavý)">
             <span id="headerThemeIcon">🌙</span>
             <span id="headerThemeText">Tmavý</span>
@@ -1074,8 +1077,8 @@
       <div class="card">
         <div class="card-header">
           <div>
-            <div class="section-title">Vzhled &amp; režim progrese</div>
-            <div class="section-subtitle">Motiv Pixel 10 Pro a chování automatických návrhů</div>
+            <div class="section-title">Vzhled, haptika, zvuk &amp; režim progrese</div>
+            <div class="section-subtitle">Motiv Pixel 10 Pro, vibrace při cvičení a chování návrhů</div>
           </div>
         </div>
 
@@ -1086,6 +1089,29 @@
             <button type="button" class="seg-btn" data-set-theme="dim">🌗 Mezi</button>
             <button type="button" class="seg-btn" data-set-theme="dark">🌙 Tmavý</button>
           </div>
+        </div>
+
+        <div class="sports-toggle-grid" style="margin-bottom: 12px;">
+          <button type="button" class="sport-toggle-card enabled" id="toggleSoundSettingBtn">
+            <div>
+              <span class="sport-toggle-name">🔔 Zvuková upozornění</span>
+              <span class="sport-toggle-desc">Odpočet 3-2-1 a konec pauzy</span>
+            </div>
+            <span class="switch-indicator" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="sport-toggle-card enabled" id="toggleHapticsSettingBtn">
+            <div>
+              <span class="sport-toggle-name">📳 Haptická odezva</span>
+              <span class="sport-toggle-desc">Vibrace při sériích a konci pauzy</span>
+            </div>
+            <span class="switch-indicator" aria-hidden="true"></span>
+          </button>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <button type="button" id="testFeedbackBtn" class="secondary-btn" style="width: 100%;">
+            Vyzkoušet zvuk a vibraci
+          </button>
         </div>
 
         <div class="segmented" id="settingsModeSegmented">
@@ -1658,7 +1684,7 @@
           recoveryByDate: {},
           body: { weightKg: null, waistCm: null, dietMode: 'intuitive', dietIntuitive: 'maintenance', dailyKcal: 2500, history: [] },
           supplements: { creatine: { active: false, grams: 5 }, collagen: { active: false, grams: 15 } },
-          muted: false, customVideos: {}, logs: []
+          muted: false, hapticsEnabled: true, customVideos: {}, logs: []
         };
       }
 
@@ -1701,6 +1727,7 @@
           if (saved.supplements.collagen) out.supplements.collagen = { ...out.supplements.collagen, ...saved.supplements.collagen };
         }
         if (typeof saved.muted === 'boolean') out.muted = saved.muted;
+        if (typeof saved.hapticsEnabled === 'boolean') out.hapticsEnabled = saved.hapticsEnabled;
         if (saved.customVideos && typeof saved.customVideos === 'object') out.customVideos = saved.customVideos;
         if (Array.isArray(saved.logs)) out.logs = deduplicateLogs(saved.logs);
         return out;
@@ -1760,6 +1787,99 @@
           console.error('Chyba při ukládání:', err);
           showToast('Nepodařilo se uložit data — zkontroluj volné místo v prohlížeči');
         }
+      }
+
+      /* ======================================================================
+         PIXEL HAPTICS & WEB AUDIO ENGINE (TRÉNINKOVÁ ODEZVA)
+         ====================================================================== */
+      let sharedAudioCtx = null;
+      function getAudioContext() {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return null;
+        if (!sharedAudioCtx) sharedAudioCtx = new AudioCtx();
+        if (sharedAudioCtx.state === 'suspended') {
+          sharedAudioCtx.resume().catch(() => {});
+        }
+        return sharedAudioCtx;
+      }
+
+      function triggerHaptic(pattern) {
+        if (!state.hapticsEnabled) return;
+        try {
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+            navigator.vibrate(pattern);
+          }
+        } catch (e) {}
+      }
+
+      function playSynthTone(freq, durationSec, type = 'sine', peakGain = 0.08, delaySec = 0) {
+        if (state.muted) return;
+        try {
+          const ctx = getAudioContext();
+          if (!ctx) return;
+          const now = ctx.currentTime + delaySec;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(freq, now);
+          gain.gain.setValueAtTime(0.0001, now);
+          gain.gain.linearRampToValueAtTime(peakGain, now + 0.012);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + durationSec + 0.02);
+        } catch (e) {}
+      }
+
+      function feedbackTick() {
+        triggerHaptic(14);
+        playSynthTone(520, 0.035, 'triangle', 0.035, 0);
+      }
+
+      function feedbackSetComplete() {
+        triggerHaptic([28, 45, 45]);
+        playSynthTone(587.33, 0.11, 'sine', 0.08, 0);
+        playSynthTone(880, 0.18, 'sine', 0.09, 0.09);
+      }
+
+      function feedbackWorkoutSaved() {
+        triggerHaptic([35, 55, 35, 55, 75]);
+        playSynthTone(523.25, 0.12, 'sine', 0.08, 0);
+        playSynthTone(659.25, 0.12, 'sine', 0.08, 0.11);
+        playSynthTone(1046.5, 0.24, 'sine', 0.10, 0.22);
+      }
+
+      function feedbackCountdownBeep(secLeft) {
+        triggerHaptic(22);
+        const freq = secLeft === 1 ? 784 : 587.33;
+        playSynthTone(freq, 0.11, 'sine', 0.075, 0);
+      }
+
+      function feedbackRestFinished() {
+        triggerHaptic([120, 80, 120, 80, 220]);
+        playSynthTone(784, 0.16, 'triangle', 0.11, 0);
+        playSynthTone(1046.5, 0.22, 'triangle', 0.12, 0.18);
+        playSynthTone(1046.5, 0.34, 'triangle', 0.13, 0.42);
+      }
+
+      function renderSoundHapticControls() {
+        const hdrBtn = document.getElementById('headerSoundBtn');
+        const hdrIcon = document.getElementById('headerSoundIcon');
+        const soundCard = document.getElementById('toggleSoundSettingBtn');
+        const hapticCard = document.getElementById('toggleHapticsSettingBtn');
+
+        const soundOn = !state.muted;
+        const hapticOn = Boolean(state.hapticsEnabled);
+
+        if (hdrIcon) hdrIcon.textContent = soundOn ? '🔔' : '🔕';
+        if (hdrBtn) {
+          hdrBtn.style.background = soundOn ? 'var(--blue-dim)' : 'var(--tint-2)';
+          hdrBtn.style.borderColor = soundOn ? 'var(--blue-border)' : 'var(--border-hairline)';
+          hdrBtn.style.color = soundOn ? 'var(--blue-soft)' : 'var(--text-secondary)';
+        }
+        if (soundCard) soundCard.classList.toggle('enabled', soundOn);
+        if (hapticCard) hapticCard.classList.toggle('enabled', hapticOn);
       }
 
       let uiState = {
@@ -2763,6 +2883,7 @@
       function renderHistoryTab() {
         renderBodyMetricsCard();
         renderSupplementsCard();
+        renderSoundHapticControls();
 
         const togglesEl = document.getElementById('activeSportsToggles');
         togglesEl.innerHTML = Object.values(SPORTS_CATALOG).map(sp => {
@@ -2846,25 +2967,6 @@
       const RING_CIRCUMFERENCE = 2 * Math.PI * 15.5;
       let timerState = { remainingSeconds: 150, totalSeconds: 150, running: false, finished: false, visible: false, label: 'Pauza mezi sériemi', intervalId: null };
 
-      function playTimerTone() {
-        if (state.muted) return;
-        try {
-          const AudioCtx = window.AudioContext || window.webkitAudioContext;
-          if (!AudioCtx) return;
-          const ctx = new AudioCtx();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(740, ctx.currentTime);
-          gain.gain.setValueAtTime(0.08, ctx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.45);
-        } catch (err) {}
-      }
-
       function renderTimerUI() {
         const island = document.getElementById('restIsland');
         const disp = document.getElementById('timerDisplay');
@@ -2899,12 +3001,14 @@
 
         timerState.intervalId = setInterval(() => {
           timerState.remainingSeconds -= 1;
-          if (timerState.remainingSeconds <= 0) {
+          if (timerState.remainingSeconds > 0 && timerState.remainingSeconds <= 3) {
+            feedbackCountdownBeep(timerState.remainingSeconds);
+          } else if (timerState.remainingSeconds <= 0) {
             timerState.remainingSeconds = 0;
             timerState.running = false;
             timerState.finished = true;
             clearInterval(timerState.intervalId);
-            playTimerTone();
+            feedbackRestFinished();
           }
           renderTimerUI();
         }, 1000);
@@ -3284,6 +3388,7 @@
         uiState.nextHighlightExId = null;
         initSessionSets();
         renderAllTabs();
+        feedbackWorkoutSaved();
         showToast('Domácí trénink uložen');
       }
 
@@ -3296,6 +3401,7 @@
         saveState();
         initSessionSets();
         renderAllTabs();
+        feedbackWorkoutSaved();
         showToast('Lezení uloženo do deníku');
       }
 
@@ -3308,6 +3414,7 @@
         saveState();
         initSessionSets();
         renderAllTabs();
+        feedbackWorkoutSaved();
         showToast('Badminton uložen');
       }
 
@@ -3320,6 +3427,7 @@
         saveState();
         initSessionSets();
         renderAllTabs();
+        feedbackWorkoutSaved();
         showToast('Jízda na kole uložena');
       }
 
@@ -3414,6 +3522,7 @@
 
       function renderAllTabs() {
         renderHeaderMode();
+        renderSoundHapticControls();
         renderLogTab();
         renderRecoveryTab();
         renderBodyTab();
@@ -3423,6 +3532,7 @@
 
       document.querySelectorAll('header nav .seg-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+          feedbackTick();
           uiState.activeTab = btn.dataset.tab;
           document.querySelectorAll('header nav .seg-btn').forEach(b => b.classList.toggle('active', b === btn));
           document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -3431,8 +3541,39 @@
         });
       });
 
-      document.getElementById('headerThemeBtn').addEventListener('click', cycleTheme);
+      document.getElementById('headerSoundBtn').addEventListener('click', () => {
+        state.muted = !state.muted;
+        saveState();
+        renderSoundHapticControls();
+        if (!state.muted) feedbackTick();
+        else triggerHaptic(18);
+        showToast(state.muted ? 'Zvuky pauzy vypnuty' : 'Zvuky pauzy zapnuty');
+      });
+
+      document.getElementById('toggleSoundSettingBtn').addEventListener('click', () => {
+        state.muted = !state.muted;
+        saveState();
+        renderSoundHapticControls();
+        if (!state.muted) feedbackTick();
+        showToast(state.muted ? 'Zvuková upozornění vypnuta' : 'Zvuková upozornění zapnuta');
+      });
+
+      document.getElementById('toggleHapticsSettingBtn').addEventListener('click', () => {
+        state.hapticsEnabled = !state.hapticsEnabled;
+        saveState();
+        renderSoundHapticControls();
+        if (state.hapticsEnabled) triggerHaptic([30, 40, 30]);
+        showToast(state.hapticsEnabled ? 'Haptická odezva zapnuta' : 'Haptická odezva vypnuta');
+      });
+
+      document.getElementById('testFeedbackBtn').addEventListener('click', () => {
+        feedbackSetComplete();
+        showToast('Test zvuku a vibrace');
+      });
+
+      document.getElementById('headerThemeBtn').addEventListener('click', () => { feedbackTick(); cycleTheme(); });
       document.getElementById('headerModeBtn').addEventListener('click', () => {
+        feedbackTick();
         state.progressionMode = state.progressionMode === 'progression' ? 'maintenance' : 'progression';
         saveState();
         renderAllTabs();
@@ -3446,6 +3587,7 @@
       document.getElementById('activitySegmented').addEventListener('click', (e) => {
         const actBtn = e.target.closest('[data-activity]');
         if (!actBtn) return;
+        feedbackTick();
         uiState.selectedActivity = actBtn.dataset.activity;
         renderActivitySelector();
       });
@@ -3462,6 +3604,7 @@
       document.getElementById('contextSegmented').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-context]');
         if (!btn) return;
+        feedbackTick();
         uiState.homeContext = btn.dataset.context;
         document.querySelectorAll('#contextSegmented .seg-btn').forEach(b => {
           const act = b === btn;
@@ -3471,30 +3614,31 @@
         renderLogTab();
       });
 
-      document.getElementById('togglePairedSetsBtn').addEventListener('click', () => { uiState.pairedSetsMode = !uiState.pairedSetsMode; renderLogTab(); });
-      document.getElementById('togglePullupsOverrideBtn').addEventListener('click', () => { uiState.overridePullups = !uiState.overridePullups; renderLogTab(); });
+      document.getElementById('togglePairedSetsBtn').addEventListener('click', () => { feedbackTick(); uiState.pairedSetsMode = !uiState.pairedSetsMode; renderLogTab(); });
+      document.getElementById('togglePullupsOverrideBtn').addEventListener('click', () => { feedbackTick(); uiState.overridePullups = !uiState.overridePullups; renderLogTab(); });
 
       document.getElementById('homeExercisesContainer').addEventListener('click', (e) => {
         const videoExId = e.target.closest('[data-open-video]')?.dataset.openVideo;
         if (videoExId) { openVideoTechniqueModal(videoExId); return; }
 
         const rirAttr = e.target.closest('[data-set-rir]')?.dataset.setRir;
-        if (rirAttr) { const [exId, rirVal] = rirAttr.split(':'); uiState.sessionRir[exId] = rirVal; renderLogTab(); return; }
+        if (rirAttr) { feedbackTick(); const [exId, rirVal] = rirAttr.split(':'); uiState.sessionRir[exId] = rirVal; renderLogTab(); return; }
 
         const qualAttr = e.target.closest('[data-set-qual]')?.dataset.setQual;
-        if (qualAttr) { const [exId, qualVal] = qualAttr.split(':'); uiState.sessionQuality[exId] = qualVal; renderLogTab(); return; }
+        if (qualAttr) { feedbackTick(); const [exId, qualVal] = qualAttr.split(':'); uiState.sessionQuality[exId] = qualVal; renderLogTab(); return; }
 
         const loadDec = e.target.closest('[data-load-dec]')?.dataset.loadDec;
-        if (loadDec) { changeExerciseLoad(loadDec, -1); return; }
+        if (loadDec) { feedbackTick(); changeExerciseLoad(loadDec, -1); return; }
 
         const loadInc = e.target.closest('[data-load-inc]')?.dataset.loadInc;
-        if (loadInc) { changeExerciseLoad(loadInc, 1); return; }
+        if (loadInc) { feedbackTick(); changeExerciseLoad(loadInc, 1); return; }
 
         const loadPick = e.target.closest('[data-load-pick]')?.dataset.loadPick;
         if (loadPick) { openLoadPickerModal(loadPick); return; }
 
         const quickApply = e.target.closest('[data-quick-apply]')?.dataset.quickApply;
         if (quickApply) {
+          feedbackSetComplete();
           const [exId, type, deltaStr] = quickApply.split(':');
           if (type === 'add_kg') changeExerciseLoad(exId, Number(deltaStr) >= 0 ? 1 : -1);
           else if (type === 'level_up') {
@@ -3514,6 +3658,7 @@
 
         const modSetsAttr = e.target.closest('[data-mod-sets]')?.dataset.modSets;
         if (modSetsAttr) {
+          feedbackTick();
           const [exId, dStr] = modSetsAttr.split(':');
           const d = Number(dStr);
           const sets = uiState.sessionSets[exId];
@@ -3527,6 +3672,7 @@
 
         const repDelta = e.target.closest('[data-rep-delta]')?.dataset.repDelta;
         if (repDelta) {
+          feedbackTick();
           const [exId, idxStr, dStr] = repDelta.split(':');
           const idx = Number(idxStr);
           const sets = uiState.sessionSets[exId];
@@ -3542,6 +3688,7 @@
           if (sets && sets[idx]) {
             sets[idx].completed = !sets[idx].completed;
             if (sets[idx].completed) {
+              feedbackSetComplete();
               const activeList = getActiveWorkoutExercises();
               const ex = activeList.find(x => x.id === exId);
               const presc = getExerciseGoalPrescription(ex);
@@ -3561,6 +3708,8 @@
                 const sec = uiState.pairedSetsMode ? 75 : (presc.restEx + extraRest);
                 startRestTimer(sec, nextEx ? `Další: ${nextEx.shortName}` : 'Hlavní cviky hotovy');
               }
+            } else {
+              feedbackTick();
             }
             renderLogTab();
           }
@@ -3573,6 +3722,7 @@
         if (infoId) { openComplementaryInfoModal(infoId); return; }
         const repAttr = e.target.closest('[data-comp-reps]')?.dataset.compReps;
         if (repAttr) {
+          feedbackTick();
           const [cId, dStr] = repAttr.split(':');
           const cs = uiState.compSets[cId];
           if (cs) { cs.reps = Math.max(4, Math.min(30, cs.reps + Number(dStr))); renderLogTab(); }
@@ -3582,8 +3732,11 @@
         if (togId && uiState.compSets[togId]) {
           uiState.compSets[togId].completed = !uiState.compSets[togId].completed;
           if (uiState.compSets[togId].completed) {
+            feedbackSetComplete();
             const cDef = COMPLEMENTARY_CATALOG.find(x => x.id === togId);
             startRestTimer(cDef?.restSec || 60, `${cDef?.shortName || 'Doplněk'} • pauza`);
+          } else {
+            feedbackTick();
           }
           renderLogTab();
         }
@@ -3935,16 +4088,120 @@
       });
 
       document.getElementById('timerToggleBtn').addEventListener('click', () => {
+        feedbackTick();
         if (timerState.running) { clearInterval(timerState.intervalId); timerState.running = false; renderTimerUI(); }
         else { startRestTimer(timerState.remainingSeconds > 0 ? timerState.remainingSeconds : 150, timerState.label); }
       });
 
-      document.getElementById('timerSub15Btn').addEventListener('click', () => { timerState.remainingSeconds = Math.max(0, timerState.remainingSeconds - 15); renderTimerUI(); });
-      document.getElementById('timerAdd15Btn').addEventListener('click', () => { timerState.remainingSeconds += 15; timerState.totalSeconds = Math.max(timerState.totalSeconds, timerState.remainingSeconds); timerState.finished = false; renderTimerUI(); });
-      document.getElementById('timerDismissBtn').addEventListener('click', () => { clearInterval(timerState.intervalId); timerState.running = false; timerState.visible = false; renderTimerUI(); });
+      document.getElementById('timerSub15Btn').addEventListener('click', () => { feedbackTick(); timerState.remainingSeconds = Math.max(0, timerState.remainingSeconds - 15); renderTimerUI(); });
+      document.getElementById('timerAdd15Btn').addEventListener('click', () => { feedbackTick(); timerState.remainingSeconds += 15; timerState.totalSeconds = Math.max(timerState.totalSeconds, timerState.remainingSeconds); timerState.finished = false; renderTimerUI(); });
+      document.getElementById('timerDismissBtn').addEventListener('click', () => { feedbackTick(); clearInterval(timerState.intervalId); timerState.running = false; timerState.visible = false; renderTimerUI(); });
 
       document.getElementById('modalCloseX').addEventListener('click', closeModal);
       document.getElementById('modalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'modalBackdrop') closeModal(); });
+
+      /* ----------------------------------------------------------------------
+         DYNAMIC PNG ICON & PWA MANIFEST GENERATOR FOR ANDROID CHROME
+         ---------------------------------------------------------------------- */
+      function renderPngIconDataUrl(size) {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return null;
+
+          const s = size / 512;
+          const bgGrad = ctx.createLinearGradient(0, 0, size, size);
+          bgGrad.addColorStop(0, '#14233b');
+          bgGrad.addColorStop(0.55, '#0d1322');
+          bgGrad.addColorStop(1, '#092919');
+          ctx.fillStyle = bgGrad;
+          ctx.fillRect(0, 0, size, size);
+
+          const mintGlow = ctx.createRadialGradient(128 * s, 112 * s, 0, 128 * s, 112 * s, 320 * s);
+          mintGlow.addColorStop(0, 'rgba(56, 224, 108, 0.45)');
+          mintGlow.addColorStop(1, 'rgba(56, 224, 108, 0)');
+          ctx.fillStyle = mintGlow;
+          ctx.fillRect(0, 0, size, size);
+
+          const blueGlow = ctx.createRadialGradient(420 * s, 400 * s, 0, 420 * s, 400 * s, 320 * s);
+          blueGlow.addColorStop(0, 'rgba(84, 162, 255, 0.42)');
+          blueGlow.addColorStop(1, 'rgba(84, 162, 255, 0)');
+          ctx.fillStyle = blueGlow;
+          ctx.fillRect(0, 0, size, size);
+
+          ctx.fillStyle = '#f5f7fc';
+          ctx.beginPath();
+          ctx.arc(256 * s, 166 * s, 32 * s, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = '#38e06c';
+          ctx.lineWidth = 22 * s;
+          ctx.beginPath();
+          ctx.moveTo(152 * s, 246 * s);
+          ctx.quadraticCurveTo(256 * s, 274 * s, 360 * s, 246 * s);
+          ctx.stroke();
+
+          ctx.strokeStyle = '#85beff';
+          ctx.lineWidth = 22 * s;
+          ctx.beginPath();
+          ctx.moveTo(256 * s, 260 * s);
+          ctx.lineTo(256 * s, 364 * s);
+          ctx.stroke();
+
+          ctx.strokeStyle = '#54a2ff';
+          ctx.lineWidth = 20 * s;
+          ctx.beginPath();
+          ctx.moveTo(198 * s, 320 * s);
+          ctx.lineTo(256 * s, 368 * s);
+          ctx.lineTo(314 * s, 320 * s);
+          ctx.stroke();
+
+          return canvas.toDataURL('image/png');
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function setupAndroidPwaManifest() {
+        const png192 = renderPngIconDataUrl(192);
+        const png512 = renderPngIconDataUrl(512);
+        if (!png192 || !png512) return;
+
+        const appleIcon = document.getElementById('appleTouchIconLink');
+        if (appleIcon) appleIcon.href = png512;
+
+        const baseUrl = window.location.href.split('#')[0].split('?')[0];
+        const manifestObj = {
+          name: 'Trénink & Rovnováha 2.0',
+          short_name: 'Trénink',
+          description: 'Sledování silového tréninku, lezení, badmintonu, kola, regenerace a progresu.',
+          start_url: baseUrl,
+          scope: baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1),
+          display: 'standalone',
+          orientation: 'portrait-primary',
+          background_color: '#0c0e16',
+          theme_color: '#0c0e16',
+          lang: 'cs',
+          icons: [
+            { src: png192, sizes: '192x192', type: 'image/png', purpose: 'any' },
+            { src: png512, sizes: '512x512', type: 'image/png', purpose: 'any' },
+            { src: png512, sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+          ]
+        };
+
+        try {
+          const blob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
+          const manifestUrl = URL.createObjectURL(blob);
+          const linkEl = document.getElementById('dynamicManifestLink');
+          if (linkEl) linkEl.href = manifestUrl;
+        } catch (e) {}
+      }
+
+      setupAndroidPwaManifest();
 
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
